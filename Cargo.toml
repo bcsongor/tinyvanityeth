@@ -1,0 +1,32 @@
+[package]
+name = "tinyvanityeth"
+version = "1.0.0"
+description = "Tiny and fast command line tool to find vanity Ethereum addresses."
+authors = ["Csongor Bokay <8850110+bcsongor@users.noreply.github.com>"]
+license = "GPL-3.0-or-later"
+keywords = ["blockchain", "ethereum", "ethereum-address", "vanity-address", "vanitygen"]
+categories = ["command-line-utilities"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+getopts = "0.2"
+num_cpus = "1.13"
+secp256k1 = { version = "0.22", features = ["std", "rand-std", "global-context"] }
+tiny-keccak = { version = "2.0", features = ["keccak"] }
+rust_decimal = { version = "1.23", features = ["maths"] }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "checksum"
+harness = false
+
+[[bench]]
+name = "hex"
+harness = false
+
+[profile.release]
+lto = "fat"
