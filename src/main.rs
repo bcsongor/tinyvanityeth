@@ -1,4 +1,4 @@
-use getopts::Options;
+use getopts::{Matches, Options};
 use rust_decimal::{Decimal, MathematicalOps};
 use secp256k1::generate_keypair;
 use secp256k1::rand::thread_rng;
@@ -8,6 +8,83 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{env, thread};
 use tiny_keccak::{Hasher, Keccak};
+
+#[derive(Debug, Clone)]
+struct AddressPart {
+    part: String,
+    part_lower: String,
+}
+
+impl AddressPart {
+    fn new(part: Option<String>) -> Option<Self> {
+        part.map(|p| Self {
+            part_lower: p.to_lowercase(),
+            part: p,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Rules {
+    is_case_sensitive: bool,
+    prefix: Option<AddressPart>,
+    suffix: Option<AddressPart>,
+}
+
+#[derive(Debug, Clone)]
+struct Configuration {
+    stats_interval_sec: u64,
+    thread_count: usize,
+    rules: Rules,
+}
+
+impl TryFrom<Matches> for Configuration {
+    type Error = &'static str;
+
+    fn try_from(matches: Matches) -> Result<Self, Self::Error> {
+        if !matches.opt_present("p") && !matches.opt_present("s") {
+            return Err("a prefix or suffix must be defined");
+        }
+
+        let prefix = AddressPart::new(matches.opt_str("p"));
+        if prefix
+            .as_ref()
+            .map_or(false, |p| !is_lower_hex(&p.part_lower))
+        {
+            return Err("prefix must be hexadecimal string");
+        }
+
+        let suffix = AddressPart::new(matches.opt_str("s"));
+        if suffix
+            .as_ref()
+            .map_or(false, |p| !is_lower_hex(&p.part_lower))
+        {
+            return Err("suffix must be hexadecimal string");
+        }
+
+        let is_case_sensitive = matches.opt_present("c");
+
+        let thread_count: usize = matches
+            .opt_get("t")
+            .map_err(|_| "failed to parse thread count")?
+            .unwrap_or_else(|| num_cpus::get());
+
+        let stats_interval_sec = matches
+            .opt_get("i")
+            .map_err(|_| "failed to parse interval")?
+            .unwrap_or(10u64);
+
+        Ok(Self {
+            stats_interval_sec,
+            thread_count,
+            rules: Rules {
+                is_case_sensitive,
+                prefix,
+                suffix,
+            },
+        })
+    }
+}
 
 const ADDRESS_HEX_LENGTH: usize = 40;
 const ADDRESS_BYTES_LENGTH: usize = ADDRESS_HEX_LENGTH / 2;
@@ -37,8 +114,8 @@ fn to_hex<'a>(bytes: &[u8], buf: &'a mut [u8]) -> &'a str {
 
 /// Checks if the given string `text` is a lowercase hex string.
 fn is_lower_hex(text: &str) -> bool {
-    for c in text.bytes() {
-        if (c > 57 || c < 48) && (c < 97 || c > 102) {
+    for c in text.as_bytes() {
+        if (*c < b'0' || *c > b'9') && (*c < b'a' || *c > b'f') {
             return false;
         }
     }
@@ -81,23 +158,24 @@ fn to_checksum_address<'a>(addr: &str, checksum_addr_hex_buf: &'a mut [u8]) -> &
         .expect("to_checksum_address: failed to convert byte array to hex string")
 }
 
-/// Calculates the difficulty of finding and address with the given `prefix`.
-/// Use `is_case_sensitivity` to control if calculation should take into account checksum addresses.
-fn calc_difficulty(prefix: &str, is_case_sensitive: bool) -> u128 {
+/// Calculates the difficulty of finding an address given `rules`.
+fn calc_difficulty(rules: &Rules) -> u128 {
     const HEX_CHAR_COUNT: u128 = 16u128;
 
-    let base_difficulty = HEX_CHAR_COUNT.pow(prefix.len() as u32);
+    let prefix = rules.prefix.as_ref().map_or("", |p| &p.part);
+    let suffix = rules.suffix.as_ref().map_or("", |s| &s.part);
+
+    let base_difficulty = HEX_CHAR_COUNT.pow((prefix.len() + suffix.len()) as u32);
     // If case sensitive lookup is enabled, take into account the difference between lower
     // and upper case hex letters (e.g. F vs f).
-    if is_case_sensitive {
+    if rules.is_case_sensitive {
         const UPPER_LOWER_LETTER_COUNT: u128 = 2u128;
 
-        let letter_count: u32 = prefix
-            .chars()
-            .filter(|c| match c {
-                '0'..='9' => false,
-                _ => true,
-            })
+        let letter_count: u32 = [prefix, suffix]
+            .concat()
+            .as_bytes()
+            .iter()
+            .filter(|&c| *c < b'0' || *c > b'9')
             .count()
             .try_into()
             .unwrap();
@@ -121,45 +199,58 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
+/// Checks if an address `addr` matches the `rules`.
+fn is_addr_matching(rules: &Rules, addr: &str) -> bool {
+    let prefix = rules.prefix.as_ref();
+    let suffix = rules.suffix.as_ref();
+
+    prefix.map_or(true, |p| addr.starts_with(&p.part_lower))
+        && suffix.map_or(true, |s| addr.ends_with(&s.part_lower))
+}
+
+/// Checks if a checksum address `checksum_addr` matches the given `rules`.
+fn is_checksum_addr_matching(rules: &Rules, checksum_addr: &str) -> bool {
+    let prefix = rules.prefix.as_ref();
+    let suffix = rules.suffix.as_ref();
+
+    prefix.map_or(true, |p| checksum_addr.starts_with(&p.part))
+        && suffix.map_or(true, |s| checksum_addr.ends_with(&s.part))
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     let program = &args[0];
 
     let mut opts = Options::new();
     opts.optflag("c", "case-sensitive", "enables case-sensitive search");
-    opts.reqopt("p", "prefix", "address prefix to search for", "PREFIX");
+    opts.optopt("p", "prefix", "address prefix to search for", "PREFIX");
+    opts.optopt("s", "suffix", "address suffix to search for", "SUFFIX");
     opts.optopt("t", "threads", "number of threads to use", "COUNT");
     opts.optopt("i", "interval", "statistics print interval", "SECONDS");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("failed to parse arguments: {}", e.to_string());
+            eprintln!("error: failed to parse arguments: {}", e.to_string());
             print_usage(program, opts);
             exit(1);
         }
     };
 
-    let is_case_sensitive = matches.opt_present("c");
-    let prefix = matches.opt_str("p").unwrap();
-    let prefix_lower = prefix.to_lowercase();
-    let thread_count = matches.opt_get_default("t", num_cpus::get()).unwrap();
-    let stats_interval_sec = matches.opt_get_default("i", 10).unwrap();
-
-    // Check if the given prefix is valid hex.
-    if !is_lower_hex(&prefix_lower) {
-        eprintln!("invalid hexadecimal prefix");
+    let cfg = Configuration::try_from(matches).unwrap_or_else(|err| {
+        eprintln!("error: {}\n", err);
+        print_usage(program, opts);
         exit(2);
-    }
+    });
+    let rules = cfg.rules;
 
     let found = Arc::new(AtomicBool::new(false));
     let generated = Arc::new(AtomicU64::new(0));
 
-    let mut threads = Vec::with_capacity(thread_count);
+    let mut threads = Vec::with_capacity(cfg.thread_count);
 
-    for _ in 0..thread_count {
-        let prefix = prefix.clone();
-        let prefix_lower = prefix_lower.clone();
+    for _ in 0..cfg.thread_count {
+        let rules = rules.clone();
         let found = found.clone();
         let generated = generated.clone();
 
@@ -186,12 +277,13 @@ fn main() {
                 generated.fetch_add(1, Ordering::Relaxed);
 
                 // Match address against lowercase prefix.
-                if addr.starts_with(&prefix_lower) {
+                if is_addr_matching(&rules, addr) {
                     let checksum_addr = to_checksum_address(&addr, &mut checksum_addr_hex_buf);
 
                     // Lowercase prefix matched, if case sensitivity is enabled,
                     // check if prefix matches the checksum address.
-                    if is_case_sensitive && !checksum_addr.starts_with(&prefix) {
+                    if rules.is_case_sensitive && !is_checksum_addr_matching(&rules, checksum_addr)
+                    {
                         continue;
                     }
 
@@ -211,10 +303,10 @@ fn main() {
     }
 
     thread::spawn(move || {
-        let interval = Duration::from_secs(stats_interval_sec);
+        let interval = Duration::from_secs(cfg.stats_interval_sec);
         let mut total_generated = 0u128;
 
-        let difficulty = calc_difficulty(&prefix, is_case_sensitive);
+        let difficulty = calc_difficulty(&rules);
         let mut last_loop: Option<Instant> = None;
 
         while !found.load(Ordering::Acquire) {
@@ -239,7 +331,7 @@ fn main() {
                       Generated:   {} addresses\n  \
                       Speed:       {} addr/s\n  \
                       Probability: {}%",
-                    thread_count, difficulty, total_generated, addr_per_sec, probability_pct
+                    cfg.thread_count, difficulty, total_generated, addr_per_sec, probability_pct
                 );
             }
 
@@ -255,10 +347,18 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::{
-        calc_difficulty, calc_probability, is_lower_hex, to_checksum_address, to_hex,
-        ADDRESS_HEX_LENGTH,
+        calc_difficulty, calc_probability, is_addr_matching, is_lower_hex, to_checksum_address,
+        to_hex, AddressPart, Rules, ADDRESS_HEX_LENGTH,
     };
     use rust_decimal::Decimal;
+
+    fn get_rules(prefix: Option<&str>, suffix: Option<&str>, is_case_sensitive: bool) -> Rules {
+        Rules {
+            prefix: AddressPart::new(prefix.map(|p| p.to_owned())),
+            suffix: AddressPart::new(suffix.map(|s| s.to_owned())),
+            is_case_sensitive,
+        }
+    }
 
     #[test]
     fn it_should_hex_bytes() {
@@ -322,12 +422,40 @@ mod tests {
 
     #[test]
     fn it_should_calculate_difficulty() {
-        assert_eq!(calc_difficulty("", false), 1);
-        assert_eq!(calc_difficulty("", true), 1);
-        assert_eq!(calc_difficulty("0000", false), 65_536);
-        assert_eq!(calc_difficulty("0000", true), 65_536);
-        assert_eq!(calc_difficulty("5eaf00d", false), 268_435_456);
-        assert_eq!(calc_difficulty("5eaf00d", true), 4_294_967_296);
+        assert_eq!(calc_difficulty(&get_rules(Some(""), None, false)), 1);
+        assert_eq!(calc_difficulty(&get_rules(Some(""), None, true)), 1);
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("0000"), None, false)),
+            65_536
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("0000"), None, true)),
+            65_536
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("5eaf00d"), None, false)),
+            268_435_456
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("5eaf00d"), None, true)),
+            4_294_967_296
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(None, Some("5eaf00d"), false)),
+            268_435_456
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(None, Some("5eaf00d"), true)),
+            4_294_967_296
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("00"), Some("11"), false)),
+            65_536
+        );
+        assert_eq!(
+            calc_difficulty(&get_rules(Some("00"), Some("11"), true)),
+            65_536
+        );
     }
 
     #[test]
@@ -350,5 +478,36 @@ mod tests {
         assert_eq!(is_lower_hex("z"), false);
         assert_eq!(is_lower_hex("-1"), false);
         assert_eq!(is_lower_hex("FF"), false);
+    }
+
+    #[test]
+    fn it_should_match_addr() {
+        let rules = get_rules(Some("0000"), None, false);
+        assert_eq!(
+            is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"),
+            true
+        );
+        assert_eq!(
+            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"),
+            false
+        );
+        assert_eq!(
+            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"),
+            false
+        );
+
+        let rules = get_rules(None, Some("0000"), false);
+        assert_eq!(
+            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"),
+            true
+        );
+        assert_eq!(
+            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"),
+            false
+        );
+        assert_eq!(
+            is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"),
+            false
+        );
     }
 }
