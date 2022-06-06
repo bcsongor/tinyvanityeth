@@ -1,6 +1,6 @@
 # tinyvanityeth ✨ [![Build](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml/badge.svg)](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml)
 
-Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a given prefix.
+Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a given prefix or suffix.
 
 <p align="center">
     <img src="https://user-images.githubusercontent.com/8850110/170898547-1f5e7e6d-2a7e-43cf-94a9-4d7c66ce6fe7.png" alt="tinyvanityeth screenshot" />
@@ -34,6 +34,7 @@ Usage: tinyvanityeth [options]
 Options:
     -c, --case-sensitive    enables case-sensitive search
     -p, --prefix PREFIX     address prefix to search for
+    -s, --suffix SUFFIX     address suffix to search for
     -t, --threads COUNT     number of threads to use (default num_cpus)
     -i, --interval SECONDS  statistics print interval (default 10)
 ```
@@ -49,6 +50,12 @@ tinyvanityeth -p 5eaf00d
 ```bash
 tinyvanityeth -c -p 5EAF00D -s 60
 ```
+
+#### Find an address that start and ends with `000`
+```bash
+tinyvanityeth -p 000 -s 000
+```
+
 
 ## 🚀 Performance
 
