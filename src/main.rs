@@ -9,32 +9,49 @@ use std::time::{Duration, Instant};
 use std::{env, thread};
 use tiny_keccak::{Hasher, Keccak};
 
+/// Stores both the original case and lowercase address part to be matched.
 #[derive(Debug, Clone)]
 struct AddressPart {
+    /// Original case address part.
     part: String,
+    /// Lowercase address part.
     part_lower: String,
 }
 
-impl AddressPart {
-    fn new(part: Option<String>) -> Option<Self> {
-        part.map(|p| Self {
-            part_lower: p.to_lowercase(),
-            part: p,
-        })
+impl From<String> for AddressPart {
+    fn from(part: String) -> Self {
+        let part_lower = part.to_lowercase();
+        Self { part_lower, part }
     }
 }
 
+impl From<&str> for AddressPart {
+    fn from(part: &str) -> Self {
+        let part_lower = part.to_lowercase();
+        let part = part.to_owned();
+        Self { part_lower, part }
+    }
+}
+
+/// Search rules to evaluate a generated against.
 #[derive(Debug, Clone)]
 struct Rules {
+    /// Controls if the search is case-sensitive and thus against a checksum address.
     is_case_sensitive: bool,
+    /// Address prefix to match.
     prefix: Option<AddressPart>,
+    /// Address suffix to match.
     suffix: Option<AddressPart>,
 }
 
+/// Application configuration.
 #[derive(Debug, Clone)]
 struct Configuration {
+    /// Number of seconds between displaying statistics.
     stats_interval_sec: u64,
+    /// Number of threads to use for address generation and matching.
     thread_count: usize,
+    /// Address search rules.
     rules: Rules,
 }
 
@@ -43,21 +60,21 @@ impl TryFrom<Matches> for Configuration {
 
     fn try_from(matches: Matches) -> Result<Self, Self::Error> {
         if !matches.opt_present("p") && !matches.opt_present("s") {
-            return Err("a prefix or suffix must be defined");
+            return Err("prefix and/or suffix must be present");
         }
 
-        let prefix = AddressPart::new(matches.opt_str("p"));
-        if prefix
+        let prefix = matches.opt_str("p").map(AddressPart::from);
+        if !prefix
             .as_ref()
-            .map_or(false, |p| !is_lower_hex(&p.part_lower))
+            .map_or(true, |p| is_lower_hex(&p.part_lower))
         {
             return Err("prefix must be hexadecimal string");
         }
 
-        let suffix = AddressPart::new(matches.opt_str("s"));
-        if suffix
+        let suffix = matches.opt_str("s").map(AddressPart::from);
+        if !suffix
             .as_ref()
-            .map_or(false, |p| !is_lower_hex(&p.part_lower))
+            .map_or(true, |s| is_lower_hex(&s.part_lower))
         {
             return Err("suffix must be hexadecimal string");
         }
@@ -344,6 +361,7 @@ fn main() {
     }
 }
 
+#[rustfmt::skip]
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -354,8 +372,8 @@ mod tests {
 
     fn get_rules(prefix: Option<&str>, suffix: Option<&str>, is_case_sensitive: bool) -> Rules {
         Rules {
-            prefix: AddressPart::new(prefix.map(|p| p.to_owned())),
-            suffix: AddressPart::new(suffix.map(|s| s.to_owned())),
+            prefix: prefix.map(AddressPart::from),
+            suffix: suffix.map(AddressPart::from),
             is_case_sensitive,
         }
     }
@@ -368,10 +386,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, 0x21, 0x9a, 0xb5, 0x40, 0x35, 0x6c, 0xbb, 0x83, 0x9c, 0xbe,
             0x05, 0x30, 0x3d, 0x77, 0x05, 0xfa,
         ];
-        assert_eq!(
-            to_hex(bytes, &mut hex_buf),
-            "00000000219ab540356cbb839cbe05303d7705fa"
-        );
+        assert_eq!(to_hex(bytes, &mut hex_buf), "00000000219ab540356cbb839cbe05303d7705fa");
 
         let bytes = &[0x00, 0xff];
         assert_eq!(to_hex(bytes, &mut hex_buf), "00ff");
@@ -424,38 +439,14 @@ mod tests {
     fn it_should_calculate_difficulty() {
         assert_eq!(calc_difficulty(&get_rules(Some(""), None, false)), 1);
         assert_eq!(calc_difficulty(&get_rules(Some(""), None, true)), 1);
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("0000"), None, false)),
-            65_536
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("0000"), None, true)),
-            65_536
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("5eaf00d"), None, false)),
-            268_435_456
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("5eaf00d"), None, true)),
-            4_294_967_296
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(None, Some("5eaf00d"), false)),
-            268_435_456
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(None, Some("5eaf00d"), true)),
-            4_294_967_296
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("00"), Some("11"), false)),
-            65_536
-        );
-        assert_eq!(
-            calc_difficulty(&get_rules(Some("00"), Some("11"), true)),
-            65_536
-        );
+        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, false)), 65_536);
+        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, true)), 65_536);
+        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, false)), 268_435_456);
+        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, true)), 4_294_967_296);
+        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), false)), 268_435_456);
+        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), true)), 4_294_967_296);
+        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), false)), 65_536);
+        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), true)), 65_536);
     }
 
     #[test]
@@ -470,10 +461,7 @@ mod tests {
     fn it_should_is_lower_hex() {
         assert_eq!(is_lower_hex("00ff"), true);
         assert_eq!(is_lower_hex("00"), true);
-        assert_eq!(
-            is_lower_hex("00000000219ab540356cbb839cbe05303d7705fa"),
-            true
-        );
+        assert_eq!(is_lower_hex("00000000219ab540356cbb839cbe05303d7705fa"), true);
         assert_eq!(is_lower_hex(""), true);
         assert_eq!(is_lower_hex("z"), false);
         assert_eq!(is_lower_hex("-1"), false);
@@ -483,31 +471,13 @@ mod tests {
     #[test]
     fn it_should_match_addr() {
         let rules = get_rules(Some("0000"), None, false);
-        assert_eq!(
-            is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"),
-            true
-        );
-        assert_eq!(
-            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"),
-            false
-        );
-        assert_eq!(
-            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"),
-            false
-        );
+        assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), true);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), false);
 
         let rules = get_rules(None, Some("0000"), false);
-        assert_eq!(
-            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"),
-            true
-        );
-        assert_eq!(
-            is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"),
-            false
-        );
-        assert_eq!(
-            is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"),
-            false
-        );
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), true);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
+        assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), false);
     }
 }
