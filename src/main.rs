@@ -188,16 +188,14 @@ fn calc_difficulty(rules: &Rules) -> u128 {
     if rules.is_case_sensitive {
         const UPPER_LOWER_LETTER_COUNT: u128 = 2u128;
 
-        let letter_count: u32 = [prefix, suffix]
+        let letter_count = [prefix, suffix]
             .concat()
             .as_bytes()
             .iter()
             .filter(|&c| *c < b'0' || *c > b'9')
-            .count()
-            .try_into()
-            .unwrap();
+            .count();
 
-        base_difficulty * UPPER_LOWER_LETTER_COUNT.pow(letter_count)
+        base_difficulty * UPPER_LOWER_LETTER_COUNT.pow(letter_count as u32)
     } else {
         base_difficulty
     }
