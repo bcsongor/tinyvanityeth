@@ -1,6 +1,6 @@
 [package]
 name = "tinyvanityeth"
-version = "1.1.0"
+version = "1.1.1"
 description = "Tiny and fast command line tool to find vanity Ethereum addresses."
 authors = ["Csongor Bokay <8850110+bcsongor@users.noreply.github.com>"]
 license = "GPL-3.0-or-later"
