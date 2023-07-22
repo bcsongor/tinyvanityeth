@@ -16,7 +16,7 @@ Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a
 
 On macOS, use Homebrew to install Rust & Cargo via `brew install rustup`.
 
-For other platforms, please see the [official installation guide](https://doc.rust-lang.org/cargo/getting-started/installation.html). 
+For other platforms, please see the [official installation guide](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 
 ### Installing _tinyvanityeth_
 
@@ -35,32 +35,43 @@ Options:
     -c, --case-sensitive    enables case-sensitive search
     -p, --prefix PREFIX     address prefix to search for
     -s, --suffix SUFFIX     address suffix to search for
+    -r, --regexp REGEXP     regular expression to search for
     -t, --threads COUNT     number of threads to use (default num_cpus)
     -i, --interval SECONDS  statistics print interval (default 10)
 ```
+Suffix or prefix and regular expression rules are mutually exclusive.
 
 ### Examples
 
-#### Find an address that starts with `5eaf00d`
-```bash
+#### Find an address that starts with `5eaf00d`.
+```shell
 tinyvanityeth -p 5eaf00d
 ```
 
-#### Find an address that ends with `5eaf00d`
-```bash
+#### Find an address that ends with `5eaf00d`.
+```shell
 tinyvanityeth -s 5eaf00d
 ```
 
 #### Find a checksum address that starts with `5EAF00D`, print statistics every minute.
-```bash
+```shell
 tinyvanityeth -c -p 5EAF00D -s 60
 ```
 
-#### Find an address that starts and ends with `000`
-```bash
+#### Find an address that starts and ends with `000`.
+```shell
 tinyvanityeth -p 000 -s 000
 ```
 
+#### Find an address that contains `00000`.
+```shell
+tinyvanityeth -r '0{5}'
+```
+
+#### Find a checksum address that either starts with `B000` or ends with `F000`.
+```shell
+tinyvanityeth -c -r '^B000|F000$'
+```
 
 ## 🚀 Performance
 
@@ -91,7 +102,7 @@ Case-insensitive search for an address with the prefix `5eaf00d`. 🍣
 
 ### Build
 
-Please note, _release_ builds contain optimisations which can positively affect performance. 
+Please note, _release_ builds contain optimisations which can positively affect performance.
 It is not recommended to use _debug_ builds for searching addresses.
 
 ```shell
@@ -104,6 +115,6 @@ cargo build --release
 
 ### Run unit tests
 
-```shell 
+```shell
 cargo test
 ```

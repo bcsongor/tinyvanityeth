@@ -66,7 +66,7 @@ impl TryFrom<Matches> for Configuration {
             return Err("prefix and/or suffix or a regexp must be present");
         }
 
-        if (matches.opt_defined("p") || matches.opt_present("s")) && matches.opt_present("r") {
+        if (matches.opt_present("p") || matches.opt_present("s")) && matches.opt_present("r") {
             return Err("suffix or prefix and regexp rules are mutually exclusive");
         }
 
