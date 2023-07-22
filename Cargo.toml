@@ -1,6 +1,6 @@
 [package]
 name = "tinyvanityeth"
-version = "1.0.0"
+version = "1.1.0"
 description = "Tiny and fast command line tool to find vanity Ethereum addresses."
 authors = ["Csongor Bokay <8850110+bcsongor@users.noreply.github.com>"]
 license = "GPL-3.0-or-later"
@@ -12,13 +12,14 @@ edition = "2021"
 
 [dependencies]
 getopts = "0.2"
-num_cpus = "1.13"
-secp256k1 = { version = "0.22", features = ["std", "rand-std", "global-context"] }
-tiny-keccak = { version = "2.0", features = ["keccak"] }
-rust_decimal = { version = "1.23", features = ["maths"] }
+num_cpus = "1"
+regex = "1"
+secp256k1 = { version = "0.27", features = ["std", "rand-std", "global-context"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
+rust_decimal = { version = "1", features = ["maths"] }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.5"
 
 [[bench]]
 name = "checksum"

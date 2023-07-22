@@ -1,5 +1,6 @@
 # 📥 To do
 
 - [x] Search addresses by suffix
-- [ ] Search for addresses that match a regexp pattern
-- [ ] Support searching for addresses by multiple criteria
+- [x] Search for addresses that match a regexp pattern
+- [x] Support searching for addresses by multiple criteria _(possible via regexp rules)_
+- [ ] Update benchmarks

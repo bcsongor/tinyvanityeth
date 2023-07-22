@@ -1,4 +1,5 @@
 use getopts::{Matches, Options};
+use regex::{Regex, RegexBuilder};
 use rust_decimal::{Decimal, MathematicalOps};
 use secp256k1::generate_keypair;
 use secp256k1::rand::thread_rng;
@@ -42,6 +43,8 @@ struct Rules {
     prefix: Option<AddressPart>,
     /// Address suffix to match.
     suffix: Option<AddressPart>,
+    /// Regular expression to match.
+    regexp: Option<Regex>,
 }
 
 /// Application configuration.
@@ -59,8 +62,12 @@ impl TryFrom<Matches> for Configuration {
     type Error = &'static str;
 
     fn try_from(matches: Matches) -> Result<Self, Self::Error> {
-        if !matches.opt_present("p") && !matches.opt_present("s") {
-            return Err("prefix and/or suffix must be present");
+        if (!matches.opt_present("p") && !matches.opt_present("s")) && !matches.opt_present("r") {
+            return Err("prefix and/or suffix or a regexp must be present");
+        }
+
+        if (matches.opt_present("p") || matches.opt_present("s")) && matches.opt_present("r") {
+            return Err("suffix or prefix and regexp rules are mutually exclusive");
         }
 
         let prefix = matches.opt_str("p").map(AddressPart::from);
@@ -81,6 +88,13 @@ impl TryFrom<Matches> for Configuration {
 
         let is_case_sensitive = matches.opt_present("c");
 
+        let regexp = matches.opt_str("r").as_ref().map(|rs| {
+            RegexBuilder::new(rs)
+                .case_insensitive(!is_case_sensitive)
+                .build()
+                .expect("regexp must be a valid regular expression")
+        });
+
         let thread_count: usize = matches
             .opt_get("t")
             .map_err(|_| "failed to parse thread count")?
@@ -98,6 +112,7 @@ impl TryFrom<Matches> for Configuration {
                 is_case_sensitive,
                 prefix,
                 suffix,
+                regexp,
             },
         })
     }
@@ -176,7 +191,12 @@ fn to_checksum_address<'a>(addr: &str, checksum_addr_hex_buf: &'a mut [u8]) -> &
 }
 
 /// Calculates the difficulty of finding an address given `rules`.
-fn calc_difficulty(rules: &Rules) -> u128 {
+fn calc_difficulty(rules: &Rules) -> Option<u128> {
+    // Ignore difficulty calculation if a regexp rule is present.
+    if rules.regexp.is_some() {
+        return None;
+    }
+
     const HEX_CHAR_COUNT: u128 = 16u128;
 
     let prefix = rules.prefix.as_ref().map_or("", |p| &p.part);
@@ -195,9 +215,9 @@ fn calc_difficulty(rules: &Rules) -> u128 {
             .filter(|&c| *c < b'0' || *c > b'9')
             .count();
 
-        base_difficulty * UPPER_LOWER_LETTER_COUNT.pow(letter_count as u32)
+        Some(base_difficulty * UPPER_LOWER_LETTER_COUNT.pow(letter_count as u32))
     } else {
-        base_difficulty
+        Some(base_difficulty)
     }
 }
 
@@ -216,20 +236,30 @@ fn print_usage(program: &str, opts: Options) {
 
 /// Checks if an address `addr` matches the `rules`.
 fn is_addr_matching(rules: &Rules, addr: &str) -> bool {
-    let prefix = rules.prefix.as_ref();
-    let suffix = rules.suffix.as_ref();
+    match rules.regexp.as_ref() {
+        Some(regexp) => regexp.is_match(addr),
+        None => {
+            let prefix = rules.prefix.as_ref();
+            let suffix = rules.suffix.as_ref();
 
-    prefix.map_or(true, |p| addr.starts_with(&p.part_lower))
-        && suffix.map_or(true, |s| addr.ends_with(&s.part_lower))
+            prefix.map_or(true, |p| addr.starts_with(&p.part_lower))
+                && suffix.map_or(true, |s| addr.ends_with(&s.part_lower))
+        }
+    }
 }
 
 /// Checks if a checksum address `checksum_addr` matches the given `rules`.
 fn is_checksum_addr_matching(rules: &Rules, checksum_addr: &str) -> bool {
-    let prefix = rules.prefix.as_ref();
-    let suffix = rules.suffix.as_ref();
+    match rules.regexp.as_ref() {
+        Some(regexp) => regexp.is_match(checksum_addr),
+        None => {
+            let prefix = rules.prefix.as_ref();
+            let suffix = rules.suffix.as_ref();
 
-    prefix.map_or(true, |p| checksum_addr.starts_with(&p.part))
-        && suffix.map_or(true, |s| checksum_addr.ends_with(&s.part))
+            prefix.map_or(true, |p| checksum_addr.starts_with(&p.part))
+                && suffix.map_or(true, |s| checksum_addr.ends_with(&s.part))
+        }
+    }
 }
 
 fn main() {
@@ -240,6 +270,7 @@ fn main() {
     opts.optflag("c", "case-sensitive", "enables case-sensitive search");
     opts.optopt("p", "prefix", "address prefix to search for", "PREFIX");
     opts.optopt("s", "suffix", "address suffix to search for", "SUFFIX");
+    opts.optopt("r", "regexp", "regular expression to search for", "REGEXP");
     opts.optopt("t", "threads", "number of threads to use", "COUNT");
     opts.optopt("i", "interval", "statistics print interval", "SECONDS");
 
@@ -291,12 +322,16 @@ fn main() {
 
                 generated.fetch_add(1, Ordering::Relaxed);
 
-                // Match address against lowercase prefix.
-                if is_addr_matching(&rules, addr) {
+                // Match non-checksummed address against rules.
+                // If there's a regexp rule & case sensitivity is enabled proceed to
+                // match the checksum address instead.
+                if (rules.regexp.is_some() && rules.is_case_sensitive)
+                    || is_addr_matching(&rules, addr)
+                {
                     let checksum_addr = to_checksum_address(&addr, &mut checksum_addr_hex_buf);
 
-                    // Lowercase prefix matched, if case sensitivity is enabled,
-                    // check if prefix matches the checksum address.
+                    // Lowercase address matched, if case sensitivity is enabled,
+                    // check if rules match the checksum address.
                     if rules.is_case_sensitive && !is_checksum_addr_matching(&rules, checksum_addr)
                     {
                         continue;
@@ -325,10 +360,10 @@ fn main() {
         let mut last_loop: Option<Instant> = None;
 
         while !found.load(Ordering::Acquire) {
-            let delta_ms = last_loop.map_or(0u128, |last_loop| {
-                Instant::now().duration_since(last_loop).as_millis()
-            });
-            last_loop = Some(Instant::now());
+            let now = Instant::now();
+            let delta_ms =
+                last_loop.map_or(0u128, |last_loop| now.duration_since(last_loop).as_millis());
+            last_loop = Some(now);
 
             if delta_ms > 0 {
                 let curr_generated = generated.swap(0, Ordering::Relaxed);
@@ -337,17 +372,34 @@ fn main() {
                     .round();
                 total_generated += curr_generated as u128;
 
-                let probability = calc_probability(difficulty, total_generated);
-                let probability_pct = (probability * Decimal::ONE_HUNDRED).round_dp(3);
+                // If difficulty is not available (e.g. because of a regexp rule) print basic metrics only.
+                match difficulty {
+                    Some(difficulty) => {
+                        let probability = calc_probability(difficulty, total_generated);
+                        let probability_pct = (probability * Decimal::ONE_HUNDRED).round_dp(3);
 
-                println!(
-                    "Status ({} threads)\n  \
-                      Difficulty:  {}\n  \
-                      Generated:   {} addresses\n  \
-                      Speed:       {} addr/s\n  \
-                      Probability: {}%",
-                    cfg.thread_count, difficulty, total_generated, addr_per_sec, probability_pct
-                );
+                        println!(
+                            "Status ({} threads)\n  \
+                              Difficulty:  {}\n  \
+                              Generated:   {} addresses\n  \
+                              Speed:       {} addr/s\n  \
+                              Probability: {}%",
+                            cfg.thread_count,
+                            difficulty,
+                            total_generated,
+                            addr_per_sec,
+                            probability_pct
+                        );
+                    }
+                    None => {
+                        println!(
+                            "Status ({} threads)\n  \
+                              Generated:   {} addresses\n  \
+                              Speed:       {} addr/s",
+                            cfg.thread_count, total_generated, addr_per_sec,
+                        );
+                    }
+                }
             }
 
             thread::sleep(interval);
@@ -366,12 +418,17 @@ mod tests {
         calc_difficulty, calc_probability, is_addr_matching, is_lower_hex, to_checksum_address,
         to_hex, AddressPart, Rules, ADDRESS_HEX_LENGTH,
     };
+    use regex::RegexBuilder;
     use rust_decimal::Decimal;
 
-    fn get_rules(prefix: Option<&str>, suffix: Option<&str>, is_case_sensitive: bool) -> Rules {
+    fn get_rules(prefix: Option<&str>, suffix: Option<&str>, regexp: Option<&str>, is_case_sensitive: bool) -> Rules {
         Rules {
             prefix: prefix.map(AddressPart::from),
             suffix: suffix.map(AddressPart::from),
+            regexp: regexp.map(|rs| RegexBuilder::new(rs)
+                .case_insensitive(!is_case_sensitive)
+                .build()
+                .unwrap()),
             is_case_sensitive,
         }
     }
@@ -435,16 +492,19 @@ mod tests {
 
     #[test]
     fn it_should_calculate_difficulty() {
-        assert_eq!(calc_difficulty(&get_rules(Some(""), None, false)), 1);
-        assert_eq!(calc_difficulty(&get_rules(Some(""), None, true)), 1);
-        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, false)), 65_536);
-        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, true)), 65_536);
-        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, false)), 268_435_456);
-        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, true)), 4_294_967_296);
-        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), false)), 268_435_456);
-        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), true)), 4_294_967_296);
-        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), false)), 65_536);
-        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), true)), 65_536);
+        assert_eq!(calc_difficulty(&get_rules(Some(""), None, None, false)), Some(1));
+        assert_eq!(calc_difficulty(&get_rules(Some(""), None, None, true)), Some(1));
+        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, None, false)), Some(65_536));
+        assert_eq!(calc_difficulty(&get_rules(Some("0000"), None, None, true)), Some(65_536));
+        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, None, false)), Some(268_435_456));
+        assert_eq!(calc_difficulty(&get_rules(Some("5eaf00d"), None, None, true)), Some(4_294_967_296));
+        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), None, false)), Some(268_435_456));
+        assert_eq!(calc_difficulty(&get_rules(None, Some("5eaf00d"), None, true)), Some(4_294_967_296));
+        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), None, false)), Some(65_536));
+        assert_eq!(calc_difficulty(&get_rules(Some("00"), Some("11"), None, true)), Some(65_536));
+        assert_eq!(calc_difficulty(&get_rules(None, None, Some(""), false)), None);
+        assert_eq!(calc_difficulty(&get_rules(None, None, Some("0{7}"), false)), None);
+        assert_eq!(calc_difficulty(&get_rules(None, None, Some("0{7}"), true)), None);
     }
 
     #[test]
@@ -468,14 +528,34 @@ mod tests {
 
     #[test]
     fn it_should_match_addr() {
-        let rules = get_rules(Some("0000"), None, false);
+        let rules = get_rules(Some("0000"), None, None, false);
         assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), true);
         assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
         assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), false);
 
-        let rules = get_rules(None, Some("0000"), false);
+        let rules = get_rules(None, Some("0000"), None, false);
         assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), true);
         assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
         assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), false);
+
+        let rules = get_rules(None, None, Some("^0{4}"), false);
+        assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), true);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), false);
+
+        let rules = get_rules(None, None, Some("0{4}$"), false);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d770000"), true);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
+        assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), false);
+
+        let rules = get_rules(None, None, Some("^abcd{2}"), false);
+        assert_eq!(is_addr_matching(&rules, "abcdd000219ab540356cbb839cbe05303d770000"), true);
+        assert_eq!(is_addr_matching(&rules, "ABcDD000219ab540356cbb839cbe05303d770000"), true);
+        assert_eq!(is_addr_matching(&rules, "ff000000219ab540356cbb839cbe05303d7705fa"), false);
+        assert_eq!(is_addr_matching(&rules, "00000000219ab540356cbb839cbe05303d7705fa"), false);
+
+        let rules = get_rules(None, None, Some("^A{3}"), true);
+        assert_eq!(is_addr_matching(&rules, "AAADD000219ab540356cbb839cbe05303d770000"), true);
+        assert_eq!(is_addr_matching(&rules, "aaaDD000219ab540356cbb839cbe05303d770000"), false);
     }
 }
