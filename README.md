@@ -1,6 +1,6 @@
 # tinyvanityeth ✨ [![Build](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml/badge.svg)](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml) ![GitHub tag (with filter)](https://img.shields.io/github/v/tag/bcsongor/tinyvanityeth?label=version)
 
-Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a given prefix, suffix, or both.
+Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a given pattern.
 
 <p align="center">
     <img src="https://user-images.githubusercontent.com/8850110/170898547-1f5e7e6d-2a7e-43cf-94a9-4d7c66ce6fe7.png" alt="tinyvanityeth screenshot" />
@@ -53,9 +53,9 @@ tinyvanityeth -p 5eaf00d
 tinyvanityeth -s 5eaf00d
 ```
 
-#### Find a checksum address that starts with `5EAF00D`, print statistics every minute.
+#### Find a checksum address that starts with `5EAF00D`, print statistics every 60 seconds.
 ```shell
-tinyvanityeth -c -p 5EAF00D -s 60
+tinyvanityeth -c -p 5EAF00D -i 60
 ```
 
 #### Find an address that starts and ends with `000`.
