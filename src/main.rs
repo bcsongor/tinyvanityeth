@@ -224,8 +224,16 @@ fn calc_difficulty(rules: &Rules) -> Option<u128> {
 /// Calculates the probability of finding an address by specifying the `difficulty` of finding
 /// an address with the given prefix and the total number of addresses `generated` so far.
 fn calc_probability(difficulty: u128, generated: u128) -> Decimal {
-    Decimal::ONE
-        - (Decimal::ONE - Decimal::ONE / Decimal::from(difficulty)).powd(Decimal::from(generated))
+    let difficulty = Decimal::from(difficulty);
+    let generated = Decimal::from(generated);
+
+    // P       = 1-(1-1/difficulty)^generated          [overflows]
+    // 1-P     = (1-1/difficulty)^generated
+    // ln(1-P) = generated * ln(1-1/difficulty)
+    // 1-P     = e^(generated * ln(1-1/difficulty))
+    // P       = 1-e^(generated * ln(1-1/difficulty))  [numerically stable]
+    let x = Decimal::ONE - Decimal::ONE / difficulty;
+    Decimal::ONE - Decimal::E.powd(generated * Decimal::ln(&x))
 }
 
 /// Prints the usage of the program.
@@ -509,10 +517,18 @@ mod tests {
 
     #[test]
     fn it_should_calculate_probability() {
-        assert_eq!(
-            calc_probability(65_536, 65_536 / 2).round_dp(4),
-            Decimal::from_str_exact("0.3935").unwrap()
-        );
+        let difficulties = [
+            65_536,
+            // Should not panic with `Pow overflowed`.
+            std::u32::MAX as u128 * 2 + 2,
+            std::u64::MAX as u128 * 2 + 2,
+        ];
+        for difficulty in difficulties {
+            assert_eq!(
+                calc_probability(difficulty, difficulty / 2).round_dp(4),
+                Decimal::from_str_exact("0.3935").unwrap()
+            );
+        }
     }
 
     #[test]
