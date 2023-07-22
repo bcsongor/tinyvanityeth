@@ -1,4 +1,4 @@
-# tinyvanityeth ✨ [![Build](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml/badge.svg)](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml)
+# tinyvanityeth ✨ [![Build](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml/badge.svg)](https://github.com/bcsongor/tinyvanityeth/actions/workflows/build.yml) ![GitHub tag (with filter)](https://img.shields.io/github/v/tag/bcsongor/tinyvanityeth?label=version)
 
 Tiny and _fast_ command line tool to find vanity Ethereum addresses that match a given prefix, suffix, or both.
 
