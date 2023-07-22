@@ -331,7 +331,7 @@ fn main() {
                     let checksum_addr = to_checksum_address(&addr, &mut checksum_addr_hex_buf);
 
                     // Lowercase address matched, if case sensitivity is enabled,
-                    // check if rules matche the checksum address.
+                    // check if rules match the checksum address.
                     if rules.is_case_sensitive && !is_checksum_addr_matching(&rules, checksum_addr)
                     {
                         continue;
