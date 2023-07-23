@@ -520,8 +520,8 @@ mod tests {
         let difficulties = [
             65_536,
             // Should not panic with `Pow overflowed`.
-            std::u32::MAX as u128 * 2 + 2,
-            std::u64::MAX as u128 * 2 + 2,
+            u32::MAX as u128 * 2 + 2,
+            u64::MAX as u128 * 2 + 2,
         ];
         for difficulty in difficulties {
             assert_eq!(
